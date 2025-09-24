@@ -66,34 +66,33 @@ Resources:
           import boto3
 
           def lambda_handler(event, context):
-              # Initiera DynamoDB resource
               dynamodb = boto3.resource('dynamodb')
               table = dynamodb.Table('HelloWorldTable2')
 
+              # Läs språk från query parameter (?lang=Swedish)
+              lang = event.get("queryStringParameters", {}).get("lang", "English")
+
               try:
-                  # Hämta item där Language = "English"
-                  response = table.get_item(Key={'Language': 'English'})
+                  response = table.get_item(Key={'Language': lang})
                   item = response.get('Item')
 
                   if item:
-                      # Om item finns → returnera greeting
                       return {
                           'statusCode': 200,
                           'body': json.dumps({"message": item['Greeting']})
                       }
                   else:
-                      # Om inget item finns → returnera 404
                       return {
                           'statusCode': 404,
-                          'body': json.dumps({"message": "No greeting found for this language."})
+                          'body': json.dumps({"message": f"No greeting found for '{lang}'."})
                       }
               except Exception as e:
-                  # Om fel → logga och returnera 500
                   print(e)
                   return {
                       'statusCode': 500,
-                      'body': json.dumps({"message": "Could not fetch data from DynamoDB."})
+                      'body': json.dumps({"message": "Error fetching data."})
                   }
+
 
   # -------------------------------
   # Allow API Gateway to invoke Lambda
