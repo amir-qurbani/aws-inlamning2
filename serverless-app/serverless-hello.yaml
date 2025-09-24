@@ -70,7 +70,10 @@ Resources:
               table = dynamodb.Table('HelloWorldTable2')
 
               # Läs språk från query parameter (?lang=Swedish)
-              lang = event.get("queryStringParameters", {}).get("lang", "English")
+              lang = "English"
+              if event.get("queryStringParameters"):
+                  lang = event["queryStringParameters"].get("lang", "English")
+
 
               try:
                   response = table.get_item(Key={'Language': lang})
