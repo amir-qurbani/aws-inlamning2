@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Serverless Hello World app with API Gateway, Lambda (Python) and DynamoDB.
+
+Resources:
+  # -------------------------------
+  # DynamoDB table for greetings
+  # -------------------------------
+  GreetingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: HelloWorldTable2
+      AttributeDefinitions:
+        - AttributeName: Language   # Partition key (HASH)
+          AttributeType: S
+      KeySchema:
+        - AttributeName: Language
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST  # enklare än provisioned throughput (automatisk skalning)
+
+  # -------------------------------
+  # IAM Role for Lambda with DynamoDB + CloudWatch Logs access
+  # -------------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaDynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Tillåt Lambda att läsa från tabellen
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !GetAtt GreetingsTable.Arn
+              # Tillåt Lambda att logga till CloudWatch
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # -------------------------------
+  # Lambda function (Python 3.9)
+  # -------------------------------
+  HelloWorldFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: HelloWorldDynamoDBFunctionPython
+      Handler: index.lambda_handler        # 👉 matchar vår inline-kod (index.py)
+      Runtime: python3.9
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+
+          def lambda_handler(event, context):
+              dynamodb = boto3.resource('dynamodb')
+              table = dynamodb.Table('HelloWorldTable2')
+
+              # Läs språk från query parameter (?lang=Swedish)
+              lang = "English"
+              if event.get("queryStringParameters"):
+                  lang = event["queryStringParameters"].get("lang", "English")
+
+
+              try:
+                  response = table.get_item(Key={'Language': lang})
+                  item = response.get('Item')
+
+                  if item:
+                      return {
+                          'statusCode': 200,
+                          'body': json.dumps({"message": item['Greeting']})
+                      }
+                  else:
+                      return {
+                          'statusCode': 404,
+                          'body': json.dumps({"message": f"No greeting found for '{lang}'."})
+                      }
+              except Exception as e:
+                  print(e)
+                  return {
+                      'statusCode': 500,
+                      'body': json.dumps({"message": "Error fetching data."})
+                  }
+
+
+  # -------------------------------
+  # Allow API Gateway to invoke Lambda
+  # -------------------------------
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt HelloWorldFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*"
+
+  # -------------------------------
+  # API Gateway REST API
+  # -------------------------------
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: HelloWorldDynamoDBApiPython
+
+  # -------------------------------
+  # Add resource /hello
+  # -------------------------------
+  ApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: hello
+      RestApiId: !Ref ApiGateway
+
+  # -------------------------------
+  # GET method linked to Lambda
+  # -------------------------------
+  ApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HelloWorldFunction.Arn}/invocations"
+
+  # -------------------------------
+  # Deployment (prod stage)
+  # -------------------------------
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: prod
+
+# -------------------------------
+# Outputs: API URL efter deploy
+# -------------------------------
+Outputs:
+  ApiUrl:
+    Description: URL to HelloWorld endpoint
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/hello"
